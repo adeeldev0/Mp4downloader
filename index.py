@@ -11,7 +11,7 @@ DEVELOPER = "Adeel Baloch"
 TELEGRAM = "@sigmadev0"
 WHATSAPP_CHANNEL = "https://whatsapp.com/channel/0029Vb6sfZ6LikgCe1as3o21"
 API_KEY = "digitalapex.me"
-VERSION = "4.4"
+VERSION = "4.5"   # version badha di
 
 WELCOME = {
     "api_key": API_KEY,
@@ -25,13 +25,13 @@ WELCOME = {
     "endpoints": {
         "download": {
             "description": "Fetch video details & get download link",
-            "example": "https://mp4downloader-kaba.vercel.app/download?url=https://youtu.be/FvchYesgr6U&key=digitalapex.me",
+            "example": "https://your-app.vercel.app/download?url=https://youtu.be/FvchYesgr6U&key=digitalapex.me",
             "method": "GET",
             "parameters": {"key": "API Key (digitalapex.me)", "url": "YouTube video URL"},
             "url": "/download"
         }
     },
-    "features": ["✅ MP4 Video Only", "✅ High Quality", "✅ No Watermark", "✅ Fast Download"],
+    "features": ["✅ MP4 Video Only", "✅ High Quality (up to 1080p+)", "✅ No Watermark", "✅ Fast & Optimized"],
     "name": "YouTube Video Downloader API",
     "rate_limit": "Unlimited",
     "status": "success",
@@ -42,6 +42,24 @@ WELCOME = {
 @app.route('/')
 def home():
     return jsonify(WELCOME)
+
+# Common yt-dlp options (2026 optimized)
+def get_ydl_opts():
+    return {
+        'quiet': True,
+        'no_warnings': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web_embedded', 'ios'],  # android best for servers
+            }
+        },
+        'format': 'bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'merge_output_format': 'mp4',
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+        }
+    }
 
 @app.route('/download')
 def download_video():
@@ -57,24 +75,34 @@ def download_video():
     yt_url = unquote(yt_url)
 
     try:
-        with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
+        ydl_opts = get_ydl_opts()
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(yt_url, download=False)
 
+        duration = info.get('duration', 0)
         success = {
             "status": "success",
             "message": "Video fetched successfully!",
             "title": info.get('title', 'Unknown Video'),
-            "duration": f"{info.get('duration', 0)//60}:{info.get('duration', 0)%60:02d}",
+            "duration": f"{duration//60}:{duration%60:02d}",
             "thumbnail": info.get('thumbnail', ''),
             "download_link": f"/stream?url={yt_url}",
             "creator": DEVELOPER,
             "telegram": TELEGRAM,
-            "whatsapp_channel": WHATSAPP_CHANNEL
+            "whatsapp_channel": WHATSAPP_CHANNEL,
+            "views": info.get('view_count'),
+            "uploader": info.get('uploader')
         }
         return jsonify(success)
 
-    except Exception:
-        return jsonify({"status": "failed", "message": "Failed to fetch video", "reason": "Video private, age-restricted or network issue"}), 502
+    except Exception as e:
+        logging.error(f"Download error for {yt_url}: {str(e)}")
+        return jsonify({
+            "status": "failed", 
+            "message": "Failed to fetch video",
+            "reason": str(e)[:300]   # asli error dikhega
+        }), 502
 
 
 @app.route('/stream')
@@ -86,37 +114,48 @@ def stream_video():
     yt_url = unquote(yt_url)
 
     try:
-        ydl_opts = {
-            'format': 'best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
-            'quiet': True,
-            'no_warnings': True,
-            'merge_output_format': 'mp4'
-        }
+        ydl_opts = get_ydl_opts()
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(yt_url, download=False)
-            stream_url = info['url']
-            title = info.get('title', 'video').replace('/', '_').replace('"', '')
+            stream_url = info.get('url')
+            
+            if not stream_url:
+                raise Exception("No direct stream URL found")
 
+            title = info.get('title', 'video').replace('/', '_').replace('"', '').replace("'", "")[:100]
+        
         filename = f"{title}.mp4"
 
         def generate():
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            with requests.get(stream_url, headers=headers, stream=True, timeout=60) as r:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            with requests.get(stream_url, headers=headers, stream=True, timeout=120) as r:
                 r.raise_for_status()
-                for chunk in r.iter_content(chunk_size=16384):
+                for chunk in r.iter_content(chunk_size=32768):  # larger chunk for better speed
                     if chunk:
                         yield chunk
 
-        return Response(generate(), 
-                        mimetype='video/mp4',
-                        headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+        return Response(
+            generate(), 
+            mimetype='video/mp4',
+            headers={
+                'Content-Disposition': f'attachment; filename="{filename}"',
+                'Content-Length': info.get('filesize') or info.get('filesize_approx') or ''
+            }
+        )
 
-    except Exception:
-        return jsonify({"status": "failed", "message": "Download failed"}), 502
+    except Exception as e:
+        logging.error(f"Stream error for {yt_url}: {str(e)}")
+        return jsonify({
+            "status": "failed", 
+            "message": "Download failed",
+            "reason": str(e)[:300]
+        }), 502
 
 
-# Vercel ke liye zaroori
+# Vercel ke liye
 application = app
 
 if __name__ == "__main__":
