@@ -12,7 +12,7 @@ DEVELOPER = "Adeel Baloch"
 TELEGRAM = "@sigmadev0"
 WHATSAPP_CHANNEL = "https://whatsapp.com/channel/0029Vb6sfZ6LikgCe1as3o21"
 API_KEY = "digitalapex.me"
-VERSION = "5.2"
+VERSION = "5.3"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36",
@@ -29,14 +29,12 @@ def home():
         "version": VERSION,
         "creator": DEVELOPER,
         "telegram": TELEGRAM,
-        "whatsapp_channel": WHATSAPP_CHANNEL,
-        "note": "Innertube API (2026 optimized) - Title, Thumbnail, Duration + MP4 Link"
+        "whatsapp_channel": WHATSAPP_CHANNEL
     })
 
 def extract_video_id(url):
-    # youtu.be ya youtube.com/watch?v= dono support
     patterns = [
-        r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
+        r'(?:v=|\/)([0-9A-Za-z_-]{11})',
         r'(?:youtu\.be\/)([0-9A-Za-z_-]{11})'
     ]
     for pattern in patterns:
@@ -61,40 +59,51 @@ def download_video():
         return jsonify({"status": "failed", "message": "Invalid YouTube URL"}), 400
 
     try:
-        # Step 1: Page se real INNERTUBE_API_KEY nikaalo (dynamic & reliable)
-        page_resp = requests.get(f"https://www.youtube.com/watch?v={video_id}", headers=HEADERS, timeout=15)
+        # Step 1: Page se INNERTUBE_API_KEY nikaalo
+        page_resp = requests.get(f"https://www.youtube.com/watch?v={video_id}", headers=HEADERS, timeout=20)
         page_resp.raise_for_status()
 
         api_key_match = re.search(r'"INNERTUBE_API_KEY":"([^"]+)"', page_resp.text)
-        if not api_key_match:
-            return jsonify({"status": "failed", "message": "Could not get API key"}), 502
-        innertube_key = api_key_match.group(1)
+        innertube_key = api_key_match.group(1) if api_key_match else None
 
-        # Step 2: Innertube Player API call (ANDROID client - sabse best 2026 mein)
+        if not innertube_key:
+            return jsonify({"status": "failed", "message": "Could not extract API key"}), 502
+
+        # Step 2: Improved Innertube Player API (2026 fixed payload)
         payload = {
             "context": {
                 "client": {
                     "clientName": "ANDROID",
-                    "clientVersion": "20.10.38",
-                    "androidSdkVersion": 30
+                    "clientVersion": "19.45.36",          # stable version 2026 mein
+                    "androidSdkVersion": 34
                 }
             },
-            "videoId": video_id
+            "videoId": video_id,
+            "contentCheckOk": True,
+            "racyCheckOk": True,
+            "playbackContext": {
+                "contentPlaybackContext": {
+                    "html5Preference": "HTML5_PREF_WANTS"
+                }
+            }
         }
 
         api_url = f"https://www.youtube.com/youtubei/v1/player?key={innertube_key}"
-        resp = requests.post(api_url, json=payload, headers=HEADERS, timeout=15)
+        resp = requests.post(api_url, json=payload, headers=HEADERS, timeout=20)
         resp.raise_for_status()
         data = resp.json()
 
-        # Video details
+        # Video details (agar na mile toh fallback)
         video_details = data.get("videoDetails", {})
-        title = video_details.get("title", "Unknown Video")
-        duration = int(video_details.get("lengthSeconds", 0))
-        duration_str = f"{duration//60}:{duration%60:02d}"
-        thumbnail = video_details.get("thumbnail", {}).get("thumbnails", [{}])[-1].get("url", "")
+        title = video_details.get("title") or "Unknown Video"
+        duration_sec = int(video_details.get("lengthSeconds") or 0)
+        duration_str = f"{duration_sec//60}:{duration_sec%60:02d}"
+        
+        # Thumbnail
+        thumbnails = video_details.get("thumbnail", {}).get("thumbnails", [])
+        thumbnail = thumbnails[-1].get("url") if thumbnails else ""
 
-        # Best MP4 direct link (formats + adaptiveFormats mein se)
+        # Direct MP4 link (formats + adaptiveFormats)
         streaming_data = data.get("streamingData", {})
         direct_link = None
         for fmt in streaming_data.get("formats", []) + streaming_data.get("adaptiveFormats", []):
