@@ -1,68 +1,37 @@
 from flask import Flask, request, jsonify, Response
-import yt_dlp
 import requests
+import re
+import json
 import logging
-from urllib.parse import unquote
+from urllib.parse import unquote, quote
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 DEVELOPER = "Adeel Baloch"
 TELEGRAM = "@sigmadev0"
-WHATSAPP_CHANNEL = "https://whatsapp.com/channel/0029Vb6sfZ6LikgCe1as3o21"
 API_KEY = "digitalapex.me"
-VERSION = "4.6"
+VERSION = "5.1"
 
-WELCOME = {
-    "api_key": API_KEY,
-    "creator": {
-        "name": DEVELOPER,
-        "telegram": TELEGRAM,
-        "whatsapp_channel": WHATSAPP_CHANNEL,
-        "website": "digitalapex.me"
-    },
-    "description": "Download YouTube videos as high quality MP4 video only",
-    "endpoints": {
-        "download": {
-            "description": "Fetch video details & get download link",
-            "example": "https://your-app.vercel.app/download?url=https://youtu.be/FvchYesgr6U&key=digitalapex.me",
-            "method": "GET",
-            "parameters": {"key": "API Key", "url": "YouTube URL"},
-            "url": "/download"
-        }
-    },
-    "features": ["✅ MP4 Video Only", "✅ High Quality", "✅ Optimized for 2026 YouTube"],
-    "name": "YouTube Video Downloader API",
-    "rate_limit": "Unlimited",
-    "status": "success",
-    "version": VERSION,
-    "welcome": "🎬 Welcome to YouTube Video Downloader API by Adeel Baloch"
+# Common Headers (Android + Web mimic)
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.youtube.com/",
+    "Origin": "https://www.youtube.com"
 }
 
 @app.route('/')
 def home():
-    return jsonify(WELCOME)
-
-# Best yt-dlp options for March 2026 (Server side)
-def get_ydl_opts():
-    return {
-        'quiet': True,
-        'no_warnings': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'android_vr', 'web', 'ios'],  # android priority
-                'player_skip': ['webpage', 'configs'],   # fast extract
-            }
-        },
-        'format': 'bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-        'merge_output_format': 'mp4',
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://www.youtube.com/',
-        },
-        'nocheckcertificate': True,
+    welcome = {
+        "status": "success",
+        "name": "YouTube Downloader API (Requests Only)",
+        "version": VERSION,
+        "creator": DEVELOPER,
+        "telegram": TELEGRAM,
+        "note": "Limited support - only basic public videos may work"
     }
+    return jsonify(welcome)
 
 @app.route('/download')
 def download_video():
@@ -70,82 +39,95 @@ def download_video():
     key = request.args.get('key')
 
     if not yt_url:
-        return jsonify({"status": "failed", "message": "URL missing!"}), 400
-
+        return jsonify({"status": "failed", "message": "URL missing"}), 400
     if key and key != API_KEY:
         return jsonify({"status": "failed", "message": "Invalid API Key"}), 401
 
     yt_url = unquote(yt_url).strip()
 
     try:
-        ydl_opts = get_ydl_opts()
+        # Step 1: Get video page
+        session = requests.Session()
+        resp = session.get(yt_url, headers=HEADERS, timeout=20)
+        resp.raise_for_status()
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(yt_url, download=False)
+        html = resp.text
 
-        duration = info.get('duration', 0)
+        # Extract ytInitialPlayerResponse
+        player_match = re.search(r'ytInitialPlayerResponse\s*=\s*(\{.+?\});', html, re.DOTALL)
+        if not player_match:
+            # Fallback: try ytInitialData
+            data_match = re.search(r'ytInitialData\s*=\s*(\{.+?\});', html, re.DOTALL)
+            if data_match:
+                raw_data = data_match.group(1)
+            else:
+                return jsonify({"status": "failed", "message": "Could not parse YouTube data"}), 502
+        else:
+            raw_data = player_match.group(1)
+
+        # Clean and parse JSON
+        raw_data = re.sub(r'[\x00-\x1F\x7F]', '', raw_data)  # remove control chars
+        data = json.loads(raw_data)
+
+        # Extract basic info
+        video_details = data.get('videoDetails', {})
+        title = video_details.get('title', 'Unknown Video')
+        thumbnail = video_details.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', '')
+        duration = int(video_details.get('lengthSeconds', 0))
+        duration_str = f"{duration//60}:{duration%60:02d}"
+
+        # Streaming URL (bahut cases mein nahi milega bina signature ke)
+        streaming_url = None
+        formats = data.get('streamingData', {}).get('formats', []) + data.get('streamingData', {}).get('adaptiveFormats', [])
+        for fmt in formats:
+            if fmt.get('mimeType', '').startswith('video/mp4'):
+                streaming_url = fmt.get('url')
+                break
+
         success = {
             "status": "success",
-            "message": "Video fetched successfully!",
-            "title": info.get('title', 'Unknown Video'),
-            "duration": f"{duration//60}:{duration%60:02d}",
-            "thumbnail": info.get('thumbnail', ''),
-            "download_link": f"/stream?url={yt_url}",
+            "message": "Video details fetched (limited)",
+            "title": title,
+            "duration": duration_str,
+            "thumbnail": thumbnail,
+            "direct_download_link": streaming_url if streaming_url else None,
+            "note": "If direct link is None, streaming may not work without advanced signature decryption",
             "creator": DEVELOPER,
-            "telegram": TELEGRAM,
-            "whatsapp_channel": WHATSAPP_CHANNEL,
-            "views": info.get('view_count'),
-            "uploader": info.get('uploader')
+            "telegram": TELEGRAM
         }
+
         return jsonify(success)
 
     except Exception as e:
-        error_str = str(e)
-        logging.error(f"Extract error for {yt_url}: {error_str}")
-        
+        logging.error(f"Error: {str(e)}")
         return jsonify({
             "status": "failed",
-            "message": "Failed to fetch video details",
-            "reason": error_str[:400]   # asli error dikhega
+            "message": "Failed to fetch video",
+            "reason": str(e)[:300]
         }), 502
 
 
+# Stream route (agar direct link mil jaye toh)
 @app.route('/stream')
 def stream_video():
-    yt_url = request.args.get('url')
-    if not yt_url:
-        return jsonify({"status": "failed", "message": "URL missing"}), 400
-
-    yt_url = unquote(yt_url).strip()
+    direct_url = request.args.get('url')
+    if not direct_url:
+        return jsonify({"status": "failed", "message": "Direct URL missing"}), 400
 
     try:
-        ydl_opts = get_ydl_opts()
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(yt_url, download=False)
-            stream_url = info.get('url')
-            if not stream_url:
-                raise Exception("No stream URL found")
-
-            title = info.get('title', 'video').replace('/', '_').replace('"', '').replace("'", "")[:120]
-
-        filename = f"{title}.mp4"
-
         def generate():
-            headers = {'User-Agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36'}
-            with requests.get(stream_url, headers=headers, stream=True, timeout=90) as r:
+            h = {'User-Agent': HEADERS['User-Agent']}
+            with requests.get(direct_url, headers=h, stream=True, timeout=90) as r:
                 r.raise_for_status()
                 for chunk in r.iter_content(chunk_size=65536):
                     if chunk:
                         yield chunk
 
-        return Response(generate(), 
-                        mimetype='video/mp4',
-                        headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+        return Response(generate(), mimetype='video/mp4',
+                        headers={'Content-Disposition': 'attachment; filename="video.mp4"'})
 
-    except Exception as e:
-        logging.error(f"Stream error: {str(e)}")
-        return jsonify({"status": "failed", "message": "Download failed", "reason": str(e)[:300]}), 502
+    except Exception:
+        return jsonify({"status": "failed", "message": "Streaming failed"}), 502
 
 
 application = app
