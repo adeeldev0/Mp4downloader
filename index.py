@@ -4,7 +4,7 @@ import requests
 import logging
 from urllib.parse import unquote
 
-# Flask app ko top-level banaya (Vercel ke liye zaroori)
+# Create Flask app
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -100,3 +100,26 @@ def stream_video():
             title = info.get('title', 'video').replace('/', '_').replace('"', '')
 
         filename = f"{title}.mp4"
+
+        def generate():
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            with requests.get(stream_url, headers=headers, stream=True, timeout=60) as r:
+                r.raise_for_status()
+                for chunk in r.iter_content(chunk_size=16384):
+                    if chunk:
+                        yield chunk
+
+        return Response(generate(), 
+                        mimetype='video/mp4',
+                        headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+    except Exception:
+        return jsonify({"status": "failed", "message": "Download failed"}), 502
+
+
+# === Vercel ke liye Important Lines ===
+application = app
+handler = app
+
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', port=5000)
