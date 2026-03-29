@@ -1,47 +1,71 @@
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify
 import yt_dlp
-import requests
+import logging
 
 app = Flask(__name__)
 
-# Sabse strong user agent jo YouTube ko "Mobile App" lagta hai
-USER_AGENT = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+# Constants
+API_KEY = "digitalapex.me"
+DEVELOPER = "Adeel Baloch"
+VERSION = "6.0"
 
-def get_ydl_opts():
-    return {
+@app.route('/')
+def home():
+    return jsonify({
+        "status": "success",
+        "version": VERSION,
+        "developer": DEVELOPER,
+        "message": "YouTube Video Downloader API is active."
+    })
+
+@app.route('/download', methods=['GET'])
+def download():
+    url = request.args.get('url')
+    key = request.args.get('key')
+
+    # 1. Validation
+    if not url:
+        return jsonify({"status": "error", "message": "Missing URL parameter"}), 400
+    if key != API_KEY:
+        return jsonify({"status": "error", "message": "Invalid API Key"}), 403
+
+    # 2. Options (Minimal for speed)
+    ydl_opts = {
         'quiet': True,
         'no_warnings': True,
-        'geo_bypass': True,  # Location restriction hatane ke liye
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android'], # Android client best hai
-                'player_skip': ['webpage'],
-            }
-        },
-        'format': 'best[ext=mp4]/best',
-        'http_headers': {
-            'User-Agent': USER_AGENT,
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Referer': 'https://www.google.com/', # Referer change kiya
-        }
+        'format': 'best[ext=mp4]',
     }
 
-@app.route('/download')
-def download_video():
-    yt_url = request.args.get('url')
-    if not yt_url: return jsonify({"status": "failed", "message": "No URL"}), 400
-
     try:
-        with yt_dlp.YoutubeDL(get_ydl_opts()) as ydl:
-            # Info nikalne ka tareeka
-            info = ydl.extract_info(yt_url, download=False)
-            return jsonify({
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            
+            # 3. Professional JSON Response
+            response_data = {
                 "status": "success",
-                "title": info.get('title'),
-                "url": info.get('url') # Yeh direct link hai
-            })
+                "code": 200,
+                "data": {
+                    "title": info.get('title'),
+                    "duration": info.get('duration'),
+                    "thumbnail": info.get('thumbnail'),
+                    "channel": info.get('uploader'),
+                    "direct_url": info.get('url')
+                },
+                "meta": {
+                    "version": VERSION,
+                    "developer": DEVELOPER,
+                    "website": "digitalapex.me"
+                }
+            }
+            return jsonify(response_data)
+
     except Exception as e:
-        return jsonify({"status": "failed", "reason": str(e)}), 502
+        return jsonify({
+            "status": "error",
+            "code": 500,
+            "message": "Failed to fetch video",
+            "details": str(e)
+        }), 500
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5000)
+    app.run(debug=True)
