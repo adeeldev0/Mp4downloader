@@ -3,17 +3,17 @@ import requests
 import re
 import json
 import logging
-from urllib.parse import unquote, quote
+from urllib.parse import unquote
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 DEVELOPER = "Adeel Baloch"
 TELEGRAM = "@sigmadev0"
+WHATSAPP_CHANNEL = "https://whatsapp.com/channel/0029Vb6sfZ6LikgCe1as3o21"
 API_KEY = "digitalapex.me"
-VERSION = "5.1"
+VERSION = "5.2"
 
-# Common Headers (Android + Web mimic)
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9",
@@ -23,15 +23,27 @@ HEADERS = {
 
 @app.route('/')
 def home():
-    welcome = {
+    return jsonify({
         "status": "success",
-        "name": "YouTube Downloader API (Requests Only)",
+        "name": "YouTube Video Downloader API",
         "version": VERSION,
         "creator": DEVELOPER,
         "telegram": TELEGRAM,
-        "note": "Limited support - only basic public videos may work"
-    }
-    return jsonify(welcome)
+        "whatsapp_channel": WHATSAPP_CHANNEL,
+        "note": "Innertube API (2026 optimized) - Title, Thumbnail, Duration + MP4 Link"
+    })
+
+def extract_video_id(url):
+    # youtu.be ya youtube.com/watch?v= dono support
+    patterns = [
+        r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
+        r'(?:youtu\.be\/)([0-9A-Za-z_-]{11})'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
 
 @app.route('/download')
 def download_video():
@@ -39,67 +51,73 @@ def download_video():
     key = request.args.get('key')
 
     if not yt_url:
-        return jsonify({"status": "failed", "message": "URL missing"}), 400
+        return jsonify({"status": "failed", "message": "URL missing!"}), 400
     if key and key != API_KEY:
         return jsonify({"status": "failed", "message": "Invalid API Key"}), 401
 
     yt_url = unquote(yt_url).strip()
+    video_id = extract_video_id(yt_url)
+    if not video_id:
+        return jsonify({"status": "failed", "message": "Invalid YouTube URL"}), 400
 
     try:
-        # Step 1: Get video page
-        session = requests.Session()
-        resp = session.get(yt_url, headers=HEADERS, timeout=20)
+        # Step 1: Page se real INNERTUBE_API_KEY nikaalo (dynamic & reliable)
+        page_resp = requests.get(f"https://www.youtube.com/watch?v={video_id}", headers=HEADERS, timeout=15)
+        page_resp.raise_for_status()
+
+        api_key_match = re.search(r'"INNERTUBE_API_KEY":"([^"]+)"', page_resp.text)
+        if not api_key_match:
+            return jsonify({"status": "failed", "message": "Could not get API key"}), 502
+        innertube_key = api_key_match.group(1)
+
+        # Step 2: Innertube Player API call (ANDROID client - sabse best 2026 mein)
+        payload = {
+            "context": {
+                "client": {
+                    "clientName": "ANDROID",
+                    "clientVersion": "20.10.38",
+                    "androidSdkVersion": 30
+                }
+            },
+            "videoId": video_id
+        }
+
+        api_url = f"https://www.youtube.com/youtubei/v1/player?key={innertube_key}"
+        resp = requests.post(api_url, json=payload, headers=HEADERS, timeout=15)
         resp.raise_for_status()
+        data = resp.json()
 
-        html = resp.text
-
-        # Extract ytInitialPlayerResponse
-        player_match = re.search(r'ytInitialPlayerResponse\s*=\s*(\{.+?\});', html, re.DOTALL)
-        if not player_match:
-            # Fallback: try ytInitialData
-            data_match = re.search(r'ytInitialData\s*=\s*(\{.+?\});', html, re.DOTALL)
-            if data_match:
-                raw_data = data_match.group(1)
-            else:
-                return jsonify({"status": "failed", "message": "Could not parse YouTube data"}), 502
-        else:
-            raw_data = player_match.group(1)
-
-        # Clean and parse JSON
-        raw_data = re.sub(r'[\x00-\x1F\x7F]', '', raw_data)  # remove control chars
-        data = json.loads(raw_data)
-
-        # Extract basic info
-        video_details = data.get('videoDetails', {})
-        title = video_details.get('title', 'Unknown Video')
-        thumbnail = video_details.get('thumbnail', {}).get('thumbnails', [{}])[-1].get('url', '')
-        duration = int(video_details.get('lengthSeconds', 0))
+        # Video details
+        video_details = data.get("videoDetails", {})
+        title = video_details.get("title", "Unknown Video")
+        duration = int(video_details.get("lengthSeconds", 0))
         duration_str = f"{duration//60}:{duration%60:02d}"
+        thumbnail = video_details.get("thumbnail", {}).get("thumbnails", [{}])[-1].get("url", "")
 
-        # Streaming URL (bahut cases mein nahi milega bina signature ke)
-        streaming_url = None
-        formats = data.get('streamingData', {}).get('formats', []) + data.get('streamingData', {}).get('adaptiveFormats', [])
-        for fmt in formats:
-            if fmt.get('mimeType', '').startswith('video/mp4'):
-                streaming_url = fmt.get('url')
+        # Best MP4 direct link (formats + adaptiveFormats mein se)
+        streaming_data = data.get("streamingData", {})
+        direct_link = None
+        for fmt in streaming_data.get("formats", []) + streaming_data.get("adaptiveFormats", []):
+            if fmt.get("mimeType", "").startswith("video/mp4") and fmt.get("url"):
+                direct_link = fmt.get("url")
                 break
 
         success = {
             "status": "success",
-            "message": "Video details fetched (limited)",
+            "message": "Video fetched successfully!",
             "title": title,
             "duration": duration_str,
             "thumbnail": thumbnail,
-            "direct_download_link": streaming_url if streaming_url else None,
-            "note": "If direct link is None, streaming may not work without advanced signature decryption",
+            "direct_download_link": direct_link,
+            "download_link": f"/stream?url={direct_link}" if direct_link else None,
             "creator": DEVELOPER,
-            "telegram": TELEGRAM
+            "telegram": TELEGRAM,
+            "whatsapp_channel": WHATSAPP_CHANNEL
         }
-
         return jsonify(success)
 
     except Exception as e:
-        logging.error(f"Error: {str(e)}")
+        logging.error(f"Error for {yt_url}: {str(e)}")
         return jsonify({
             "status": "failed",
             "message": "Failed to fetch video",
@@ -107,7 +125,6 @@ def download_video():
         }), 502
 
 
-# Stream route (agar direct link mil jaye toh)
 @app.route('/stream')
 def stream_video():
     direct_url = request.args.get('url')
@@ -123,11 +140,12 @@ def stream_video():
                     if chunk:
                         yield chunk
 
-        return Response(generate(), mimetype='video/mp4',
+        return Response(generate(),
+                        mimetype='video/mp4',
                         headers={'Content-Disposition': 'attachment; filename="video.mp4"'})
 
-    except Exception:
-        return jsonify({"status": "failed", "message": "Streaming failed"}), 502
+    except Exception as e:
+        return jsonify({"status": "failed", "message": "Streaming failed", "reason": str(e)[:200]}), 502
 
 
 application = app
