@@ -3,6 +3,7 @@ import yt_dlp
 import requests
 import logging
 from urllib.parse import unquote
+import time
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -11,37 +12,9 @@ DEVELOPER = "Adeel Baloch"
 TELEGRAM = "@sigmadev0"
 WHATSAPP_CHANNEL = "https://whatsapp.com/channel/0029Vb6sfZ6LikgCe1as3o21"
 API_KEY = "digitalapex.me"
-VERSION = "4.3"
+VERSION = "4.4"
 
-# Welcome JSON
-WELCOME_JSON = {
-    "api_key": API_KEY,
-    "creator": {
-        "name": DEVELOPER,
-        "telegram": TELEGRAM,
-        "whatsapp_channel": WHATSAPP_CHANNEL,
-        "website": "digitalapex.me"
-    },
-    "description": "Download YouTube videos as high quality MP4 video only",
-    "endpoints": {
-        "download": {
-            "description": "Fetch video details & get direct download link",
-            "example": "https://your-vercel-url.vercel.app/download?url=https://youtu.be/FvchYesgr6U&key=digitalapex.me",
-            "method": "GET",
-            "parameters": {
-                "key": "API Key (digitalapex.me)",
-                "url": "YouTube video URL"
-            },
-            "url": "/download"
-        }
-    },
-    "features": ["✅ MP4 Video Only", "✅ High Quality", "✅ No Watermark", "✅ Fast Download", "✅ Full Details in JSON"],
-    "name": "YouTube Video Downloader API",
-    "rate_limit": "Unlimited",
-    "status": "success",
-    "version": VERSION,
-    "welcome": "🎬 Welcome to YouTube Video Downloader API (MP4 Only) by Adeel Baloch"
-}
+WELCOME_JSON = { ... }   # pehle wala welcome JSON yahan paste kar do (same as before)
 
 @app.route('/')
 def home():
@@ -64,10 +37,21 @@ def download_video():
 
     yt_url = unquote(yt_url)
 
+    start_time = time.time()
+
     try:
-        # Fetch Details
-        with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'noplaylist': True}) as ydl:
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+            'socket_timeout': 30,           # yt-dlp ke liye timeout
+            'extractor_retries': 3
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(yt_url, download=False)
+
+        processing_time = round(time.time() - start_time, 2)
 
         success_response = {
             "status": "success",
@@ -77,7 +61,8 @@ def download_video():
             "thumbnail": info.get('thumbnail', ''),
             "views": info.get('view_count'),
             "uploader": info.get('uploader', 'Unknown'),
-            "download_link": f"/stream?url={yt_url}",   # Relative link (Vercel ke liye best)
+            "processing_time_seconds": processing_time,
+            "download_link": f"/stream?url={yt_url}",
             "creator": DEVELOPER,
             "telegram": TELEGRAM,
             "whatsapp_channel": WHATSAPP_CHANNEL,
@@ -92,7 +77,7 @@ def download_video():
         error.update({
             "status": "failed",
             "message": "Failed to fetch video",
-            "reason": "Video private, age-restricted, deleted, or network issue."
+            "reason": str(e)[:200] if "timeout" in str(e).lower() else "Video private, age-restricted, deleted, or network issue."
         })
         return jsonify(error), 502
 
@@ -111,7 +96,8 @@ def stream_video():
             'quiet': True,
             'no_warnings': True,
             'noplaylist': True,
-            'merge_output_format': 'mp4'
+            'merge_output_format': 'mp4',
+            'socket_timeout': 30
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -123,7 +109,7 @@ def stream_video():
 
         def generate():
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            with requests.get(stream_url, headers=headers, stream=True, timeout=90) as r:
+            with requests.get(stream_url, headers=headers, stream=True, timeout=60) as r:   # 60 seconds timeout
                 r.raise_for_status()
                 for chunk in r.iter_content(chunk_size=16384):
                     if chunk:
@@ -135,7 +121,7 @@ def stream_video():
 
     except Exception as e:
         logging.error(str(e))
-        return jsonify({"status": "failed", "message": "Download failed"}), 502
+        return jsonify({"status": "failed", "message": "Download failed", "reason": "Timeout or network issue"}), 502
 
 
 if __name__ == '__main__':
