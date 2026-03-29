@@ -12,13 +12,14 @@ DEVELOPER = "Adeel Baloch"
 TELEGRAM = "@sigmadev0"
 WHATSAPP_CHANNEL = "https://whatsapp.com/channel/0029Vb6sfZ6LikgCe1as3o21"
 API_KEY = "digitalapex.me"
-VERSION = "5.3"
+VERSION = "5.4"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Mobile Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.youtube.com/",
-    "Origin": "https://www.youtube.com"
+    "Origin": "https://www.youtube.com",
+    "Content-Type": "application/json"
 }
 
 @app.route('/')
@@ -59,22 +60,22 @@ def download_video():
         return jsonify({"status": "failed", "message": "Invalid YouTube URL"}), 400
 
     try:
-        # Step 1: Page se INNERTUBE_API_KEY nikaalo
+        # Step 1: Page se latest INNERTUBE_API_KEY nikaalo
         page_resp = requests.get(f"https://www.youtube.com/watch?v={video_id}", headers=HEADERS, timeout=20)
         page_resp.raise_for_status()
 
         api_key_match = re.search(r'"INNERTUBE_API_KEY":"([^"]+)"', page_resp.text)
-        innertube_key = api_key_match.group(1) if api_key_match else None
-
-        if not innertube_key:
+        if not api_key_match:
             return jsonify({"status": "failed", "message": "Could not extract API key"}), 502
 
-        # Step 2: Improved Innertube Player API (2026 fixed payload)
+        innertube_key = api_key_match.group(1)
+
+        # Step 2: Updated Innertube Player API (2026 working payload)
         payload = {
             "context": {
                 "client": {
                     "clientName": "ANDROID",
-                    "clientVersion": "19.45.36",          # stable version 2026 mein
+                    "clientVersion": "20.10.38",      # Updated & working version
                     "androidSdkVersion": 34
                 }
             },
@@ -88,22 +89,33 @@ def download_video():
             }
         }
 
-        api_url = f"https://www.youtube.com/youtubei/v1/player?key={innertube_key}"
+        # Important: prettyPrint=false add kiya
+        api_url = f"https://www.youtube.com/youtubei/v1/player?key={innertube_key}&prettyPrint=false"
+
         resp = requests.post(api_url, json=payload, headers=HEADERS, timeout=20)
-        resp.raise_for_status()
+        
+        # Agar 400 aaye toh error details log karo
+        if resp.status_code != 200:
+            logging.error(f"API Error {resp.status_code}: {resp.text[:500]}")
+            return jsonify({
+                "status": "failed",
+                "message": "Failed to fetch video",
+                "reason": f"API returned {resp.status_code}"
+            }), 502
+
         data = resp.json()
 
-        # Video details (agar na mile toh fallback)
+        # Video details
         video_details = data.get("videoDetails", {})
-        title = video_details.get("title") or "Unknown Video"
-        duration_sec = int(video_details.get("lengthSeconds") or 0)
+        title = video_details.get("title", "Unknown Video")
+        duration_sec = int(video_details.get("lengthSeconds", 0))
         duration_str = f"{duration_sec//60}:{duration_sec%60:02d}"
-        
+
         # Thumbnail
         thumbnails = video_details.get("thumbnail", {}).get("thumbnails", [])
-        thumbnail = thumbnails[-1].get("url") if thumbnails else ""
+        thumbnail = thumbnails[-1].get("url", "") if thumbnails else ""
 
-        # Direct MP4 link (formats + adaptiveFormats)
+        # Best MP4 direct link
         streaming_data = data.get("streamingData", {})
         direct_link = None
         for fmt in streaming_data.get("formats", []) + streaming_data.get("adaptiveFormats", []):
