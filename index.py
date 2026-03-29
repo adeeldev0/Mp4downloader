@@ -4,7 +4,6 @@ import requests
 import logging
 from urllib.parse import unquote
 
-# Create Flask app
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -26,7 +25,7 @@ WELCOME = {
     "endpoints": {
         "download": {
             "description": "Fetch video details & get download link",
-            "example": "https://your-project.vercel.app/download?url=https://youtu.be/FvchYesgr6U&key=digitalapex.me",
+            "example": "https://mp4downloader-kaba.vercel.app/download?url=https://youtu.be/FvchYesgr6U&key=digitalapex.me",
             "method": "GET",
             "parameters": {"key": "API Key (digitalapex.me)", "url": "YouTube video URL"},
             "url": "/download"
@@ -117,9 +116,8 @@ def stream_video():
         return jsonify({"status": "failed", "message": "Download failed"}), 502
 
 
-# === Vercel ke liye Important Lines ===
+# Vercel ke liye zaroori
 application = app
-handler = app
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
